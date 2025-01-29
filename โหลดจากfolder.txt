@@ -1,0 +1,65 @@
+from flask import Flask, request, jsonify
+import face_recognition
+import io
+import os
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)  # อนุญาต Cross-Origin Requests
+
+def load_known_faces_from_folder(folder_path):
+    known_face_encodings = []
+    known_face_names = []
+
+    if not os.path.exists(folder_path):
+        return known_face_encodings, known_face_names
+
+    for filename in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, filename)
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+            try:
+                image = face_recognition.load_image_file(file_path)
+                face_encodings = face_recognition.face_encodings(image)
+                if face_encodings:
+                    known_face_encodings.append(face_encodings[0])
+                    known_face_names.append(filename.split('.')[0])
+            except Exception as e:
+                print(f"Error processing {filename}: {e}")
+
+    return known_face_encodings, known_face_names
+
+@app.route('/compare-face', methods=['POST'])
+def compare_faces():
+    if 'image' not in request.files or 'folder_path' not in request.form:
+        return jsonify({'message': 'Missing image or folder path'}), 400
+
+    image_file = request.files['image']
+    folder_path = request.form['folder_path']
+    known_face_encodings, known_face_names = load_known_faces_from_folder(folder_path)
+
+    if not known_face_encodings:
+        return jsonify({'message': 'No known faces found in folder'}), 404
+
+    image_data = image_file.read()
+    image = face_recognition.load_image_file(io.BytesIO(image_data))
+    face_locations = face_recognition.face_locations(image)
+    face_encodings = face_recognition.face_encodings(image, face_locations)
+
+    for face_encoding in face_encodings:
+        matches = face_recognition.compare_faces(known_face_encodings, face_encoding, tolerance=0.6)
+        face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+        best_match_index = face_distances.argmin()
+
+        if matches[best_match_index]:
+            matched_name = known_face_names[best_match_index]
+            confidence = (1 - face_distances[best_match_index]) * 100
+            return jsonify({
+                'message': f'Match Found! Name: {matched_name}',
+                'name': matched_name,
+                'confidence': f'{confidence:.2f}%'
+            })
+
+    return jsonify({'message': 'No Match Found', 'name': None, 'confidence': '0%'})
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
